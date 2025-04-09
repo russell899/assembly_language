@@ -1,0 +1,227 @@
+.section .vectors, "ax", %progbits
+.align 4
+  b _start
+  b evt_undef
+  b evt_undef
+  b evt_undef
+  b evt_undef
+  .word 0
+  b service_irq
+  b evt_undef
+
+.data
+.align 4
+
+count:      .word  0          
+direction:  .word  1          
+
+seg7_table:
+.word 0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F
+
+.text
+.global _start
+_start:
+  mov r1, #0b11010010
+  msr cpsr_c, r1
+  ldr sp, =0xFFFFFFFC
+
+  mov r1, #0b11010011
+  msr cpsr, r1
+  ldr sp, =0x3FFFFFFC
+
+  bl config_gic          
+
+  ldr r0, =0xFF202000
+  mov r1, #8
+  str r1, [r0, #4]       
+  str r1, [r0]           
+  ldr r1, =100000000
+  str r1, [r0, #8]       
+  lsr r1, #16
+  str r1, [r0, #12]      
+  mov r1, #7
+  str r1, [r0, #4]       
+
+  ldr r0, =0xFF200050
+  mov r1, #1
+  str r1, [r0, #8]
+
+  mov r0, #0b01010011
+  msr cpsr_c, r0
+
+idle:
+  b idle
+
+evt_undef:
+  b evt_undef
+
+service_irq:
+  push {r0-r7, r12, lr}
+
+  ldr r4, =0xFFFEC100
+  ldr r5, [r4, #12]
+
+  cmp r5, #72
+  beq timer_isr
+
+  cmp r5, #73
+  beq button_isr
+
+exit_irq:
+  str r5, [r4, #16]
+  pop {r0-r7, r12, lr}
+  subs pc, lr, #4
+
+timer_isr:
+  ldr r0, =0xFF202000
+  mov r1, #1
+  str r1, [r0]
+
+  ldr r0, =count
+  ldr r1, [r0]
+
+  ldr r3, =direction
+  ldr r3, [r3]
+  adds r1, r1, r3
+
+  ldr r2, =0
+  cmp r1, r2
+  blt set_to_max
+
+  ldr r2, =999
+  cmp r1, r2
+  ble valid_count
+  ldr r1, =0
+  b store_count
+
+set_to_max:
+  ldr r1, =999
+
+valid_count:
+store_count:
+  str r1, [r0]
+  bl display_count
+  b exit_irq
+
+display_count:
+  push {lr}
+
+  mov r12, r1
+  mov r0, r12
+  ldr r1, =10
+  bl __modsi3
+  mov r2, r0
+
+  mov r0, r12
+  ldr r1, =10
+  bl __divsi3
+  mov r12, r0
+
+  mov r0, r12
+  ldr r1, =10
+  bl __modsi3
+  mov r3, r0
+
+  mov r0, r12
+  ldr r1, =10
+  bl __divsi3
+  mov r1, r0
+
+  ldr r0, =seg7_table
+  lsl r12, r2, #2
+  ldr r2, [r0, r12]
+  lsl r12, r3, #2
+  ldr r3, [r0, r12]
+  lsl r12, r1, #2
+  ldr r1, [r0, r12]
+
+  lsl r3, r3, #8
+  orr r2, r2, r3
+  lsl r1, r1, #16
+  orr r2, r2, r1
+
+  ldr r0, =0xFF200020
+  str r2, [r0]
+
+  pop {lr}
+  bx lr
+
+button_isr:
+  ldr r0, =0xFF200050
+  mov r1, #1
+  str r1, [r0, #12]
+
+  ldr r0, =direction
+  ldr r1, [r0]
+  rsb r1, r1, #0
+  str r1, [r0]
+  b exit_irq
+
+.global config_gic
+config_gic:
+  push {lr}
+
+  mov r0, #72
+  mov r1, #1
+  bl config_interrupt
+
+  mov r0, #73
+  mov r1, #1
+  bl config_interrupt
+
+  ldr r0, =0xFFFEC100
+  ldr r1, =0xFFFF
+  str r1, [r0, #4]
+  mov r1, #1
+  str r1, [r0]
+  
+  ldr r0, =0xFFFED000
+  str r1, [r0]
+
+  pop {lr}
+  bx lr
+
+config_interrupt:
+  push {r4-r5, lr}
+
+  lsr r4, r0, #5
+  ldr r2, =0xFFFED100
+  add r4, r2, r4, LSL #2
+  and r2, r0, #0x1F
+  mov r5, #1
+  lsl r2, r5, r2
+  ldr r3, [r4]
+  orr r3, r3, r2
+  str r3, [r4]
+
+  ldr r2, =0xFFFED800
+  add r4, r2, r0
+  strb r1, [r4]
+
+  pop {r4-r5, lr}
+  bx lr
+
+__divsi3:
+  push {r2, r3, lr}
+  mov r2, #0
+div_loop:
+  cmp r0, r1
+  blt div_end
+  subs r0, r0, r1
+  adds r2, r2, #1
+  b div_loop
+div_end:
+  mov r0, r2
+  pop {r2, r3, lr}
+  bx lr
+
+__modsi3:
+  push {r2, r3, lr}
+  mov r2, r0
+  bl __divsi3
+  mul r3, r0, r1
+  subs r0, r2, r3
+  pop {r2, r3, lr}
+  bx lr
+
+.end
